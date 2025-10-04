@@ -1,6 +1,7 @@
 require('dotenv').config();
+const fs = require('fs');
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const cron = require('node-cron');
+const cronModule = require('node-cron');
 
 const client = new Client({
   intents: [
@@ -10,7 +11,8 @@ const client = new Client({
   ]
 });
 
-const sendAnnouncement = (title, content) => {
+// 📢 發送嵌入式公告
+function sendAnnouncement(title, content) {
   const channel = client.channels.cache.get(process.env.CHANNEL_ID);
   if (!channel) return console.log('❌ 找不到頻道');
 
@@ -22,30 +24,28 @@ const sendAnnouncement = (title, content) => {
     .setTimestamp();
 
   channel.send({ embeds: [embed] });
-};
+}
+
+// 🗓️ 讀取 JSON 並註冊排程
+function loadSchedules() {
+  const raw = fs.readFileSync('./schedule.json', 'utf8');
+  const scheduleList = JSON.parse(raw);
+
+  scheduleList.forEach(({ cron, title, content }) => {
+    cronModule.schedule(cron, () => {
+      sendAnnouncement(title, content);
+    }, { timezone: 'Asia/Taipei' });
+  });
+
+  console.log(`✅ 已載入 ${scheduleList.length} 筆排程`);
+}
 
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  sendAnnouncement('測試公告', '這是一則手動測試的公告訊息');
+  loadSchedules();
 
-
-  // 🗓️ 每日公告
-  cron.schedule('0 12 * * *', () => sendAnnouncement('試煉之地', '試煉之地以開啟！12:00-14:00'), { timezone: 'Asia/Taipei' });
-  cron.schedule('30 19 * * *', () => sendAnnouncement('試煉之地', '試煉之地以開啟！19:30-21:30'), { timezone: 'Asia/Taipei' });
-  cron.schedule('0 14 * * *', () => sendAnnouncement('世界BOSS', '遠古巨龍已出現！'), { timezone: 'Asia/Taipei' });
-  cron.schedule('0 19 * * *', () => sendAnnouncement('世界BOSS', '足球隊長已出現！'), { timezone: 'Asia/Taipei' });
-  cron.schedule('30 18 * * *', () => sendAnnouncement('聯賽', '聯賽已開啟！18:30-19:50'), { timezone: 'Asia/Taipei' });
-  cron.schedule('30 21 * * *', () => sendAnnouncement('聯賽', '聯賽已開啟！21:30-24:00'), { timezone: 'Asia/Taipei' });
-  cron.schedule('0 18 * * *', () => sendAnnouncement('巔峰競技', '巔峰競技已開啟！18:00-19:00'), { timezone: 'Asia/Taipei' });
-  cron.schedule('0 18 * * *', () => sendAnnouncement('寵物大作戰', '寵物大作戰已開啟！18:00-23:00'), { timezone: 'Asia/Taipei' });
-
-  // 🗓️ 每週公告
-  cron.schedule('0 20 * * 2,4,6,0', () => sendAnnouncement('王者擂台', '王者擂台已開啟！20:00-21:00'), { timezone: 'Asia/Taipei' });
-  cron.schedule('30 19 * * 2,4,6', () => sendAnnouncement('飛飛樂', '飛飛樂已開啟！19:30-20:00'), { timezone: 'Asia/Taipei' });
-  cron.schedule('0 21 * * 0', () => sendAnnouncement('VIP積分', 'VIP積分將於每周一清零！請記得使用完畢！'), { timezone: 'Asia/Taipei' });
-
-  // 🗓️ 每月公告（最後一天）
-  cron.schedule('0 21 28-31 * *', () => {
+  // 🗓️ 每月最後一天排程（特殊判斷）
+  cronModule.schedule('0 21 28-31 * *', () => {
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
@@ -56,6 +56,34 @@ client.once('ready', () => {
   }, { timezone: 'Asia/Taipei' });
 });
 
-client.login(process.env.TOKEN);
+// 🧠 指令：新增排程（永久儲存）
+client.on('messageCreate', message => {
+  if (!message.content.startsWith('!新增排程')) return;
 
-sendAnnouncement('測試公告', '這是一則手動測試的公告訊息');
+  const args = message.content.split(' ');
+  if (args.length < 7) return message.reply('❌ 格式錯誤，請使用：`!新增排程 <cron> <主題> <內容>`');
+
+  const cronTime = args.slice(1, 6).join(' ');
+  const title = args[6];
+  const content = args.slice(7).join(' ');
+
+  try {
+    // 寫入 JSON
+    const raw = fs.readFileSync('./schedule.json', 'utf8');
+    const scheduleList = JSON.parse(raw);
+    scheduleList.push({ cron: cronTime, title, content });
+    fs.writeFileSync('./schedule.json', JSON.stringify(scheduleList, null, 2));
+
+    // 即時註冊
+    cronModule.schedule(cronTime, () => {
+      sendAnnouncement(title, content);
+    }, { timezone: 'Asia/Taipei' });
+
+    message.reply(`✅ 已新增排程：\`${cronTime}\` → **${title}**`);
+  } catch (err) {
+    console.error(err);
+    message.reply('❌ 新增失敗，請確認 cron 格式是否正確');
+  }
+});
+
+client.login(process.env.TOKEN);
